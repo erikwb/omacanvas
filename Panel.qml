@@ -29,7 +29,7 @@ Panel {
   property bool cursorActive: false
   property string selectedCourseId: ""
   property var payload: ({
-    schema_version: 2,
+    schema_version: 3,
     fetched_at: "",
     days: 14,
     roles: {
@@ -69,6 +69,8 @@ Panel {
     filterAssignments(selectedCourseAssignments, false)
   readonly property var selectedCourseSubmittedAssignments:
     filterAssignments(selectedCourseAssignments, true)
+  readonly property var selectedCourseAnnouncements: selectedCourse
+    ? (selectedCourse.announcements || []) : []
   readonly property var nextAssignment: teaching
     ? (assignments.length > 0 ? assignments[0] : null)
     : (openAssignments.length > 0 ? openAssignments[0] : null)
@@ -250,6 +252,18 @@ Panel {
     return parts.filter(function(part) { return part !== "" }).join(" · ")
   }
 
+  function announcementSubtitle(announcement) {
+    if (!announcement) return ""
+    var parts = []
+    var posted = new Date(announcement.posted_at || "").getTime()
+    parts.push(isFinite(posted)
+      ? "Posted " + dueLabel(announcement.posted_at)
+      : "No posted date")
+    var author = String(announcement.author || "").trim()
+    if (author !== "") parts.push(author)
+    return parts.join(" · ")
+  }
+
   function assignmentLocked(assignment) {
     if (!assignment) return false
     if (!teaching) return !!assignment.locked_for_user
@@ -369,7 +383,7 @@ Panel {
       }
       try {
         var nextPayload = JSON.parse(String(statusOutput.text || ""))
-        if (Number(nextPayload.schema_version) !== 2 || !nextPayload.roles)
+        if (Number(nextPayload.schema_version) !== 3 || !nextPayload.roles)
           throw new Error("Unsupported Omacanvas data format")
         root.payload = nextPayload
         root.ensureSelectedRole()
@@ -1115,6 +1129,67 @@ Panel {
               }
             }
 
+            PanelSectionHeader {
+              visible: !!root.selectedCourse
+              text: "RECENT ANNOUNCEMENTS"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              topPadding: Math.ceil(fontSize * 0.15) + Style.space(4)
+            }
+
+            Text {
+              visible: !!root.selectedCourse && root.selectedCourseAnnouncements.length === 0
+              width: parent.width
+              text: "No recent announcements."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.WordWrap
+            }
+
+            Repeater {
+              model: root.selectedCourseAnnouncements
+              Column {
+                required property var modelData
+                required property int index
+                width: coursesPane.width
+                spacing: Style.space(4)
+
+                AssignmentLinkRow {
+                  width: parent.width
+                  title: String(modelData.title || "Untitled announcement")
+                  subtitle: root.announcementSubtitle(modelData)
+                  submitted: false
+                  showSubmissionStatus: false
+                  locked: false
+                  linkAvailable: root.canvasItemUrl(modelData) !== ""
+                  foreground: root.foreground
+                  muted: root.dim
+                  accent: root.urgent
+                  fontFamily: root.fontFamily
+                  onActivated: root.openAssignment(modelData)
+                }
+                Text {
+                  visible: String(modelData.excerpt || "") !== ""
+                  width: parent.width
+                  text: String(modelData.excerpt || "")
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                  maximumLineCount: 3
+                  elide: Text.ElideRight
+                }
+                PanelSeparator {
+                  visible: index < root.selectedCourseAnnouncements.length - 1
+                  width: parent.width
+                  foreground: root.foreground
+                  opacity: 0.18
+                }
+              }
+            }
+
             Button {
               visible: root.hiddenCourses.length > 0
               width: parent.width
@@ -1134,7 +1209,7 @@ Panel {
             Text {
               visible: root.hiddenCoursesExpanded && root.hiddenCourses.length > 0
               width: parent.width
-              text: "Hidden courses are excluded from assignments, counts, alerts, and assignment API requests."
+              text: "Hidden courses are excluded from assignments, announcements, counts, alerts, and assignment API requests."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

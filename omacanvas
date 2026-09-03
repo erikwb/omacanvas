@@ -27,7 +27,7 @@ PLUGIN_ID = "io.github.christopherhaynes33.omacanvas"
 SERVICE = "omacanvas"
 BROWSER_SESSION_SERVICE = "omacanvas-browser-session"
 BROWSER_SESSION_VERSION = 1
-PAYLOAD_VERSION = 2
+PAYLOAD_VERSION = 3
 VISIBILITY_VERSION = 1
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_DEVTOOLS_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -45,6 +45,8 @@ BROWSER_CANDIDATES = (
     "microsoft-edge-stable",
     "vivaldi-stable",
 )
+MAX_ANNOUNCEMENTS_PER_COURSE = 3
+ANNOUNCEMENT_EXCERPT_LENGTH = 180
 
 
 class CrossOriginRequestError(RuntimeError):
@@ -917,6 +919,50 @@ def assignment_schedules(
     return schedules
 
 
+def plain_text_excerpt(value: Any, limit: int = ANNOUNCEMENT_EXCERPT_LENGTH) -> str:
+    text = sanitize_text(re.sub(r"<[^<>]*>", " ", str(value or "")))
+    if len(text) > limit:
+        text = text[: max(0, limit - 1)].rstrip() + "…"
+    return text
+
+
+def collect_announcements(
+    client: CanvasClient,
+    course_id: Any,
+) -> list[dict[str, Any]]:
+    try:
+        topics = client.get_all(
+            f"api/v1/courses/{course_id}/discussion_topics",
+            {"only_announcements": "true", "per_page": 100},
+        )
+    except CanvasPermissionError:
+        return []
+    scored: list[tuple[datetime, dict[str, Any]]] = []
+    for topic in topics:
+        if not isinstance(topic, dict):
+            continue
+        posted = parse_time(topic.get("posted_at")) or parse_time(topic.get("created_at"))
+        author = topic.get("author")
+        author_name = sanitize_text(
+            author.get("display_name") if isinstance(author, dict) else None
+        )
+        scored.append((
+            posted or datetime.min.replace(tzinfo=timezone.utc),
+            {
+                "id": topic.get("id"),
+                "title": sanitize_text(topic.get("title"), "Untitled announcement"),
+                "posted_at": posted.isoformat() if posted is not None else None,
+                "author": author_name or None,
+                "excerpt": plain_text_excerpt(topic.get("message")),
+                "html_url": validated_canvas_web_url(
+                    client.base_url, topic.get("html_url"),
+                ),
+            },
+        ))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [item for _, item in scored[:MAX_ANNOUNCEMENTS_PER_COURSE]]
+
+
 def empty_role_payload(error: str = "") -> dict[str, Any]:
     return {
         "available": False,
@@ -998,6 +1044,7 @@ def collect_role(
                 ),
             })
         upcoming.sort(key=lambda item: item["due_at"])
+        announcements = collect_announcements(client, course["id"])
         current_score = enrollment.get("computed_current_score") if enrollment else None
         current_grade = enrollment.get("computed_current_grade") if enrollment else None
         current_grade = (
@@ -1015,6 +1062,7 @@ def collect_role(
             "current_grade": current_grade,
             "needs_grading_count": needs_grading if role == "teacher" else 0,
             "assignments": upcoming,
+            "announcements": announcements,
         })
     result_courses.sort(key=lambda item: item["name"].lower())
     hidden_courses.sort(key=lambda item: item["name"].lower())
@@ -1079,6 +1127,9 @@ def print_terminal(data: dict[str, Any]) -> None:
                         else "unknown"
                     )
                 print(f"  [{status:9}] {assignment['due_at'][:10]}  {assignment['name']}")
+            for announcement in course.get("announcements") or []:
+                posted = (announcement.get("posted_at") or "")[:10] or "no date"
+                print(f"  [announce ] {posted}  {announcement.get('title', 'Untitled announcement')}")
 
 
 def main() -> int:
