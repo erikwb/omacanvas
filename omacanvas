@@ -27,7 +27,7 @@ PLUGIN_ID = "io.github.christopherhaynes33.omacanvas"
 SERVICE = "omacanvas"
 BROWSER_SESSION_SERVICE = "omacanvas-browser-session"
 BROWSER_SESSION_VERSION = 1
-PAYLOAD_VERSION = 4
+PAYLOAD_VERSION = 5
 VISIBILITY_VERSION = 1
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_DEVTOOLS_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -969,6 +969,62 @@ def collect_announcements(
     return [item for _, item in scored]
 
 
+def collect_discussions(
+    client: CanvasClient,
+    course_id: Any,
+) -> list[dict[str, Any]]:
+    """Return every discussion topic for a course, most active first.
+
+    Announcements are excluded by the API when only_announcements is absent.
+    The full list is kept in the payload so external tools can process it;
+    the panel displays only a recent subset.
+    """
+    try:
+        topics = client.get_all(
+            f"api/v1/courses/{course_id}/discussion_topics",
+            {"order_by": "recent_activity", "per_page": 100},
+        )
+    except CanvasPermissionError:
+        return []
+    scored: list[tuple[datetime, dict[str, Any]]] = []
+    for topic in topics:
+        if not isinstance(topic, dict):
+            continue
+        activity = (
+            parse_time(topic.get("last_reply_at"))
+            or parse_time(topic.get("posted_at"))
+            or parse_time(topic.get("created_at"))
+        )
+        posted = parse_time(topic.get("posted_at")) or parse_time(topic.get("created_at"))
+        author = topic.get("author")
+        if isinstance(author, dict):
+            author_name = sanitize_text(author.get("display_name"))
+        else:
+            author_name = sanitize_text(topic.get("user_name"))
+        reply_count = topic.get("discussion_subentry_count")
+        if not isinstance(reply_count, int) or isinstance(reply_count, bool):
+            reply_count = 0
+        scored.append((
+            activity or datetime.min.replace(tzinfo=timezone.utc),
+            {
+                "id": topic.get("id"),
+                "title": sanitize_text(topic.get("title"), "Untitled discussion"),
+                "posted_at": posted.isoformat() if posted is not None else None,
+                "last_activity_at": activity.isoformat() if activity is not None else None,
+                "author": author_name or None,
+                "reply_count": reply_count,
+                "pinned": topic.get("pinned") is True,
+                "locked": topic.get("locked") is True,
+                "excerpt": plain_text_excerpt(topic.get("message")),
+                "html_url": validated_canvas_web_url(
+                    client.base_url, topic.get("html_url"),
+                ),
+            },
+        ))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [item for _, item in scored]
+
+
 def collect_conversations(
     client: CanvasClient,
     course_id: Any,
@@ -1109,6 +1165,7 @@ def collect_role(
         upcoming.sort(key=lambda item: item["due_at"])
         announcements = collect_announcements(client, course["id"])
         conversations = collect_conversations(client, course["id"])
+        discussions = collect_discussions(client, course["id"])
         current_score = enrollment.get("computed_current_score") if enrollment else None
         current_grade = enrollment.get("computed_current_grade") if enrollment else None
         current_grade = (
@@ -1128,6 +1185,7 @@ def collect_role(
             "assignments": upcoming,
             "announcements": announcements,
             "conversations": conversations,
+            "discussions": discussions,
         })
     result_courses.sort(key=lambda item: item["name"].lower())
     hidden_courses.sort(key=lambda item: item["name"].lower())
@@ -1199,6 +1257,9 @@ def print_terminal(data: dict[str, Any]) -> None:
             for conversation in unread[:RECENT_ITEM_LIMIT]:
                 sent = (conversation.get("last_message_at") or "")[:10] or "no date"
                 print(f"  [unread   ] {sent}  {conversation.get('subject', 'No subject')}")
+            for discussion in (course.get("discussions") or [])[:RECENT_ITEM_LIMIT]:
+                active = (discussion.get("last_activity_at") or "")[:10] or "no date"
+                print(f"  [discuss  ] {active}  {discussion.get('title', 'Untitled discussion')}")
 
 
 def main() -> int:

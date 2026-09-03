@@ -29,7 +29,7 @@ Panel {
   property bool cursorActive: false
   property string selectedCourseId: ""
   property var payload: ({
-    schema_version: 4,
+    schema_version: 5,
     fetched_at: "",
     days: 14,
     roles: {
@@ -81,6 +81,10 @@ Panel {
     selectedCourseConversations.filter(function(item) { return !!item.unread })
   readonly property var selectedCourseRecentUnreadConversations:
     selectedCourseUnreadConversations.slice(0, 3)
+  readonly property var selectedCourseDiscussions: selectedCourse
+    ? (selectedCourse.discussions || []) : []
+  readonly property var selectedCourseRecentDiscussions:
+    selectedCourseDiscussions.slice(0, 3)
   readonly property var nextAssignment: teaching
     ? (assignments.length > 0 ? assignments[0] : null)
     : (openAssignments.length > 0 ? openAssignments[0] : null)
@@ -292,6 +296,21 @@ Panel {
     return parts.join(" · ")
   }
 
+  function discussionSubtitle(discussion) {
+    if (!discussion) return ""
+    var parts = []
+    var active = new Date(discussion.last_activity_at || "").getTime()
+    parts.push(isFinite(active)
+      ? "Active " + dueLabel(discussion.last_activity_at)
+      : "No activity date")
+    var author = String(discussion.author || "").trim()
+    if (author !== "") parts.push(author)
+    var replies = Number(discussion.reply_count) || 0
+    parts.push(replies + (replies === 1 ? " reply" : " replies"))
+    if (discussion.pinned) parts.push("Pinned")
+    return parts.join(" · ")
+  }
+
   function assignmentLocked(assignment) {
     if (!assignment) return false
     if (!teaching) return !!assignment.locked_for_user
@@ -411,7 +430,7 @@ Panel {
       }
       try {
         var nextPayload = JSON.parse(String(statusOutput.text || ""))
-        if (Number(nextPayload.schema_version) !== 4 || !nextPayload.roles)
+        if (Number(nextPayload.schema_version) !== 5 || !nextPayload.roles)
           throw new Error("Unsupported Omacanvas data format")
         root.payload = nextPayload
         root.ensureSelectedRole()
@@ -1270,6 +1289,67 @@ Panel {
               }
             }
 
+            PanelSectionHeader {
+              visible: !!root.selectedCourse
+              text: "DISCUSSIONS"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              topPadding: Math.ceil(fontSize * 0.15) + Style.space(4)
+            }
+
+            Text {
+              visible: !!root.selectedCourse && root.selectedCourseRecentDiscussions.length === 0
+              width: parent.width
+              text: "No recent discussions."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.WordWrap
+            }
+
+            Repeater {
+              model: root.selectedCourseRecentDiscussions
+              Column {
+                required property var modelData
+                required property int index
+                width: coursesPane.width
+                spacing: Style.space(4)
+
+                AssignmentLinkRow {
+                  width: parent.width
+                  title: String(modelData.title || "Untitled discussion")
+                  subtitle: root.discussionSubtitle(modelData)
+                  submitted: false
+                  showSubmissionStatus: false
+                  locked: !!modelData.locked
+                  linkAvailable: root.canvasItemUrl(modelData) !== ""
+                  foreground: root.foreground
+                  muted: root.dim
+                  accent: root.urgent
+                  fontFamily: root.fontFamily
+                  onActivated: root.openAssignment(modelData)
+                }
+                Text {
+                  visible: String(modelData.excerpt || "") !== ""
+                  width: parent.width
+                  text: String(modelData.excerpt || "")
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                  maximumLineCount: 3
+                  elide: Text.ElideRight
+                }
+                PanelSeparator {
+                  visible: index < root.selectedCourseRecentDiscussions.length - 1
+                  width: parent.width
+                  foreground: root.foreground
+                  opacity: 0.18
+                }
+              }
+            }
+
             Button {
               visible: root.hiddenCourses.length > 0
               width: parent.width
@@ -1289,7 +1369,7 @@ Panel {
             Text {
               visible: root.hiddenCoursesExpanded && root.hiddenCourses.length > 0
               width: parent.width
-              text: "Hidden courses are excluded from assignments, announcements, messages, counts, alerts, and assignment API requests."
+              text: "Hidden courses are excluded from assignments, announcements, discussions, messages, counts, alerts, and assignment API requests."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
