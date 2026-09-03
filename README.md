@@ -14,7 +14,7 @@ The panel provides three views:
 
 - **Overview** — assignment and course summaries, plus grades or grading counts.
 - **Assignments** — student work or teaching deadlines during the configured window.
-- **Courses** — per-course details, assignments, recent announcements, links, and visibility controls.
+- **Courses** — per-course details, assignments, recent announcements, unread messages, links, and visibility controls.
 
 ## Requirements
 
@@ -196,8 +196,8 @@ is read-only and does not retrieve individual submissions.
 ### Hide or restore a course
 
 In **Courses**, use the eye-slash action to hide the selected course. Hidden
-courses are excluded from assignment counts, alerts, and assignment and
-announcement API requests in both roles. Expand the muted hidden-course row and use the eye
+courses are excluded from assignment counts, alerts, and assignment,
+announcement, and conversation API requests in both roles. Expand the muted hidden-course row and use the eye
 action to restore a course.
 
 Course visibility is stored per Canvas installation in:
@@ -320,16 +320,19 @@ installation. It requests active student and teacher enrollments, student
 scores/grades and submission status, teacher grading counts, course publication
 status, and assignments due within the selected window. Assignment data
 includes publication status and Canvas availability dates needed to display
-lock and unlock information. Omacanvas also fetches the three most recent
-announcements per visible course (title, posted date, author, a short excerpt,
-and link) for the per-course screen. Teacher data is read-only; Omacanvas does not
+lock and unlock information. Omacanvas also fetches every announcement and
+conversation for each visible course (titles/subjects, dates, authors or
+participants, excerpts, and links) for the per-course screen; the panel itself
+shows the three most recent announcements and up to three unread conversations
+per course. The complete lists are included in `fetch --json` output so
+external tools can process them. Teacher data is read-only; Omacanvas does not
 retrieve individual submissions or change grades. Hidden courses skip
-assignment and announcement requests. The selected credential is read from the desktop keyring
+assignment, announcement, and conversation requests. The selected credential is read from the desktop keyring
 and is never written to Omarchy's plain-text configuration. Browser login uses
 a new private temporary browser profile and asks Chromium only for cookies
 applicable to HTTPS origins reached during login. Only a validated
 `canvas_session` value and its Canvas API base URL are retained. Assignment,
-announcement, and course links are opened in the default browser only after Omacanvas verifies
+announcement, message, and course links are opened in the default browser only after Omacanvas verifies
 that they use the validated Canvas origin; credentials are not included in
 browser links.
 

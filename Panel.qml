@@ -29,7 +29,7 @@ Panel {
   property bool cursorActive: false
   property string selectedCourseId: ""
   property var payload: ({
-    schema_version: 3,
+    schema_version: 4,
     fetched_at: "",
     days: 14,
     roles: {
@@ -71,6 +71,16 @@ Panel {
     filterAssignments(selectedCourseAssignments, true)
   readonly property var selectedCourseAnnouncements: selectedCourse
     ? (selectedCourse.announcements || []) : []
+  // The payload keeps every announcement and conversation for external
+  // tools; the panel shows only a recent subset (RECENT_ITEM_LIMIT in sync).
+  readonly property var selectedCourseRecentAnnouncements:
+    selectedCourseAnnouncements.slice(0, 3)
+  readonly property var selectedCourseConversations: selectedCourse
+    ? (selectedCourse.conversations || []) : []
+  readonly property var selectedCourseUnreadConversations:
+    selectedCourseConversations.filter(function(item) { return !!item.unread })
+  readonly property var selectedCourseRecentUnreadConversations:
+    selectedCourseUnreadConversations.slice(0, 3)
   readonly property var nextAssignment: teaching
     ? (assignments.length > 0 ? assignments[0] : null)
     : (openAssignments.length > 0 ? openAssignments[0] : null)
@@ -264,6 +274,24 @@ Panel {
     return parts.join(" · ")
   }
 
+  function conversationSubtitle(conversation) {
+    if (!conversation) return ""
+    var parts = []
+    var names = []
+    var participants = conversation.participants || []
+    for (var i = 0; i < participants.length && i < 3; i++) {
+      var name = String(participants[i].name || "").trim()
+      if (name !== "") names.push(name)
+    }
+    if (names.length > 0) parts.push(names.join(", "))
+    var sent = new Date(conversation.last_message_at || "").getTime()
+    parts.push(isFinite(sent) ? dueLabel(conversation.last_message_at) : "No date")
+    if (Number(conversation.message_count) > 1)
+      parts.push(Number(conversation.message_count) + " messages")
+    if (conversation.starred) parts.push("Starred")
+    return parts.join(" · ")
+  }
+
   function assignmentLocked(assignment) {
     if (!assignment) return false
     if (!teaching) return !!assignment.locked_for_user
@@ -383,7 +411,7 @@ Panel {
       }
       try {
         var nextPayload = JSON.parse(String(statusOutput.text || ""))
-        if (Number(nextPayload.schema_version) !== 3 || !nextPayload.roles)
+        if (Number(nextPayload.schema_version) !== 4 || !nextPayload.roles)
           throw new Error("Unsupported Omacanvas data format")
         root.payload = nextPayload
         root.ensureSelectedRole()
@@ -1138,7 +1166,7 @@ Panel {
             }
 
             Text {
-              visible: !!root.selectedCourse && root.selectedCourseAnnouncements.length === 0
+              visible: !!root.selectedCourse && root.selectedCourseRecentAnnouncements.length === 0
               width: parent.width
               text: "No recent announcements."
               color: root.dim
@@ -1148,7 +1176,7 @@ Panel {
             }
 
             Repeater {
-              model: root.selectedCourseAnnouncements
+              model: root.selectedCourseRecentAnnouncements
               Column {
                 required property var modelData
                 required property int index
@@ -1182,7 +1210,59 @@ Panel {
                   elide: Text.ElideRight
                 }
                 PanelSeparator {
-                  visible: index < root.selectedCourseAnnouncements.length - 1
+                  visible: index < root.selectedCourseRecentAnnouncements.length - 1
+                  width: parent.width
+                  foreground: root.foreground
+                  opacity: 0.18
+                }
+              }
+            }
+
+            PanelSectionHeader {
+              visible: !!root.selectedCourse
+                && root.selectedCourseUnreadConversations.length > 0
+              text: "MESSAGES · " + root.selectedCourseUnreadConversations.length + " UNREAD"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              topPadding: Math.ceil(fontSize * 0.15) + Style.space(4)
+            }
+
+            Repeater {
+              model: root.selectedCourseRecentUnreadConversations
+              Column {
+                required property var modelData
+                required property int index
+                width: coursesPane.width
+                spacing: Style.space(4)
+
+                AssignmentLinkRow {
+                  width: parent.width
+                  title: String(modelData.subject || "No subject")
+                  subtitle: root.conversationSubtitle(modelData)
+                  submitted: false
+                  showSubmissionStatus: false
+                  locked: false
+                  linkAvailable: root.canvasItemUrl(modelData) !== ""
+                  foreground: root.foreground
+                  muted: root.dim
+                  accent: root.urgent
+                  fontFamily: root.fontFamily
+                  onActivated: root.openAssignment(modelData)
+                }
+                Text {
+                  visible: String(modelData.last_message || "") !== ""
+                  width: parent.width
+                  text: String(modelData.last_message || "")
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                  maximumLineCount: 3
+                  elide: Text.ElideRight
+                }
+                PanelSeparator {
+                  visible: index < root.selectedCourseRecentUnreadConversations.length - 1
                   width: parent.width
                   foreground: root.foreground
                   opacity: 0.18
@@ -1209,7 +1289,7 @@ Panel {
             Text {
               visible: root.hiddenCoursesExpanded && root.hiddenCourses.length > 0
               width: parent.width
-              text: "Hidden courses are excluded from assignments, announcements, counts, alerts, and assignment API requests."
+              text: "Hidden courses are excluded from assignments, announcements, messages, counts, alerts, and assignment API requests."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

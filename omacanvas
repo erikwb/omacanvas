@@ -27,7 +27,7 @@ PLUGIN_ID = "io.github.christopherhaynes33.omacanvas"
 SERVICE = "omacanvas"
 BROWSER_SESSION_SERVICE = "omacanvas-browser-session"
 BROWSER_SESSION_VERSION = 1
-PAYLOAD_VERSION = 3
+PAYLOAD_VERSION = 4
 VISIBILITY_VERSION = 1
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_DEVTOOLS_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -45,8 +45,9 @@ BROWSER_CANDIDATES = (
     "microsoft-edge-stable",
     "vivaldi-stable",
 )
-MAX_ANNOUNCEMENTS_PER_COURSE = 3
+RECENT_ITEM_LIMIT = 3
 ANNOUNCEMENT_EXCERPT_LENGTH = 180
+MAX_CONVERSATION_PARTICIPANTS = 10
 
 
 class CrossOriginRequestError(RuntimeError):
@@ -930,6 +931,11 @@ def collect_announcements(
     client: CanvasClient,
     course_id: Any,
 ) -> list[dict[str, Any]]:
+    """Return every announcement for a course, newest first.
+
+    The full list is kept in the payload so external tools can process it;
+    the panel displays only a recent subset.
+    """
     try:
         topics = client.get_all(
             f"api/v1/courses/{course_id}/discussion_topics",
@@ -960,7 +966,64 @@ def collect_announcements(
             },
         ))
     scored.sort(key=lambda item: item[0], reverse=True)
-    return [item for _, item in scored[:MAX_ANNOUNCEMENTS_PER_COURSE]]
+    return [item for _, item in scored]
+
+
+def collect_conversations(
+    client: CanvasClient,
+    course_id: Any,
+) -> list[dict[str, Any]]:
+    """Return every conversation for a course, newest first.
+
+    The full list is kept in the payload so external tools can process it;
+    the panel displays only unread conversations.
+    """
+    try:
+        records = client.get_all(
+            "api/v1/conversations",
+            {"filter": f"course_{course_id}", "per_page": 100},
+        )
+    except CanvasPermissionError:
+        return []
+    inbox_url = validated_canvas_web_url(client.base_url, "/conversations")
+    scored: list[tuple[datetime, dict[str, Any]]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        sent_at = parse_time(record.get("last_message_at"))
+        participants: list[dict[str, Any]] = []
+        seen_participants = set()
+        for participant in record.get("participants") or []:
+            if not isinstance(participant, dict) or participant.get("id") in seen_participants:
+                continue
+            seen_participants.add(participant.get("id"))
+            participants.append({
+                "id": participant.get("id"),
+                "name": sanitize_text(participant.get("name"), "Unknown"),
+            })
+            if len(participants) >= MAX_CONVERSATION_PARTICIPANTS:
+                break
+        message_count = record.get("message_count")
+        if not isinstance(message_count, int) or isinstance(message_count, bool):
+            message_count = 0
+        scored.append((
+            sent_at or datetime.min.replace(tzinfo=timezone.utc),
+            {
+                "id": record.get("id"),
+                "subject": sanitize_text(record.get("subject"), "No subject"),
+                "workflow_state": record.get("workflow_state"),
+                "unread": record.get("workflow_state") == "unread",
+                "last_message_at": sent_at.isoformat() if sent_at is not None else None,
+                "last_message": plain_text_excerpt(record.get("last_message")),
+                "message_count": message_count,
+                "starred": record.get("starred") is True,
+                "participants": participants,
+                "context_name": sanitize_text(record.get("context_name")) or None,
+                "html_url": inbox_url,
+            },
+        ))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [item for _, item in scored]
 
 
 def empty_role_payload(error: str = "") -> dict[str, Any]:
@@ -1045,6 +1108,7 @@ def collect_role(
             })
         upcoming.sort(key=lambda item: item["due_at"])
         announcements = collect_announcements(client, course["id"])
+        conversations = collect_conversations(client, course["id"])
         current_score = enrollment.get("computed_current_score") if enrollment else None
         current_grade = enrollment.get("computed_current_grade") if enrollment else None
         current_grade = (
@@ -1063,6 +1127,7 @@ def collect_role(
             "needs_grading_count": needs_grading if role == "teacher" else 0,
             "assignments": upcoming,
             "announcements": announcements,
+            "conversations": conversations,
         })
     result_courses.sort(key=lambda item: item["name"].lower())
     hidden_courses.sort(key=lambda item: item["name"].lower())
@@ -1127,9 +1192,13 @@ def print_terminal(data: dict[str, Any]) -> None:
                         else "unknown"
                     )
                 print(f"  [{status:9}] {assignment['due_at'][:10]}  {assignment['name']}")
-            for announcement in course.get("announcements") or []:
+            for announcement in (course.get("announcements") or [])[:RECENT_ITEM_LIMIT]:
                 posted = (announcement.get("posted_at") or "")[:10] or "no date"
                 print(f"  [announce ] {posted}  {announcement.get('title', 'Untitled announcement')}")
+            unread = [c for c in course.get("conversations") or [] if c.get("unread")]
+            for conversation in unread[:RECENT_ITEM_LIMIT]:
+                sent = (conversation.get("last_message_at") or "")[:10] or "no date"
+                print(f"  [unread   ] {sent}  {conversation.get('subject', 'No subject')}")
 
 
 def main() -> int:

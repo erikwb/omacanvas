@@ -34,9 +34,12 @@ class FakeClient:
 class AnnouncementClient:
     base_url = "https://canvas.test/"
 
-    def __init__(self, topics=None, error=None):
+    def __init__(self, topics=None, error=None, conversations=None,
+                 conversation_error=None):
         self.topics = topics if topics is not None else []
         self.error = error
+        self.conversation_records = conversations if conversations is not None else []
+        self.conversation_error = conversation_error
         self.requested_paths = []
         self.requested_params = []
 
@@ -50,6 +53,10 @@ class AnnouncementClient:
             if self.error is not None:
                 raise self.error
             return self.topics
+        if path == "api/v1/conversations":
+            if self.conversation_error is not None:
+                raise self.conversation_error
+            return self.conversation_records
         return []
 
 
@@ -553,7 +560,7 @@ class CanvasTests(unittest.TestCase):
     def test_collects_only_assignments_in_window(self):
         data = module.collect(FakeClient(), 14, datetime(2026, 8, 27, tzinfo=timezone.utc))
         student = data["roles"]["student"]
-        self.assertEqual(data["schema_version"], 3)
+        self.assertEqual(data["schema_version"], 4)
         self.assertEqual(len(student["courses"]), 1)
         self.assertEqual([a["name"] for a in student["courses"][0]["assignments"]], ["In range"])
         self.assertEqual(
@@ -781,7 +788,7 @@ class CanvasTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "symbolic link"):
                 module.hidden_courses_for("https://canvas.example.edu", path)
 
-    def test_collects_latest_three_announcements_per_course(self):
+    def test_collects_all_announcements_newest_first(self):
         topics = [
             {"id": 1, "title": "Old news", "posted_at": "2026-08-01T10:00:00Z",
              "message": "<p>First.</p>",
@@ -809,7 +816,7 @@ class CanvasTests(unittest.TestCase):
         announcements = data["roles"]["student"]["courses"][0]["announcements"]
         self.assertEqual(
             [item["title"] for item in announcements],
-            ["Newest news", "Newer news", "Middle news"],
+            ["Newest news", "Newer news", "Middle news", "Old news", "Undated news"],
         )
         self.assertEqual(
             announcements[0]["posted_at"], "2026-08-25T10:00:00+00:00",
@@ -869,6 +876,70 @@ class CanvasTests(unittest.TestCase):
         self.assertNotIn(
             "api/v1/courses/7/discussion_topics", client.requested_paths,
         )
+
+    def test_collects_all_conversations_for_course_newest_first(self):
+        records = [
+            {"id": 11, "subject": "Old thread", "workflow_state": "read",
+             "last_message": "First", "last_message_at": "2026-08-01T10:00:00Z",
+             "message_count": 2, "starred": False,
+             "participants": [{"id": 5, "name": "Instructor"}],
+             "context_name": "Biology"},
+            {"id": 12, "subject": "New question", "workflow_state": "unread",
+             "last_message": "<p>Second</p>", "last_message_at": "2026-08-25T10:00:00Z",
+             "message_count": 1, "starred": True,
+             "participants": [{"id": 5, "name": "Instructor"}],
+             "context_name": "Biology"},
+            {"id": 13, "subject": "Middle thread", "workflow_state": "unread",
+             "last_message": "Third", "last_message_at": "2026-08-10T10:00:00Z",
+             "message_count": 4, "starred": False,
+             "participants": [{"id": 5, "name": "Instructor"}],
+             "context_name": "Biology"},
+        ]
+        client = AnnouncementClient(conversations=records)
+        data = module.collect(client, 14, datetime(2026, 8, 27, tzinfo=timezone.utc))
+        conversations = data["roles"]["student"]["courses"][0]["conversations"]
+        self.assertEqual(
+            [item["subject"] for item in conversations],
+            ["New question", "Middle thread", "Old thread"],
+        )
+        newest = conversations[0]
+        self.assertTrue(newest["unread"])
+        self.assertEqual(newest["last_message"], "Second")
+        self.assertEqual(
+            newest["last_message_at"], "2026-08-25T10:00:00+00:00",
+        )
+        self.assertTrue(newest["starred"])
+        self.assertEqual(newest["participants"], [{"id": 5, "name": "Instructor"}])
+        self.assertEqual(newest["html_url"], "https://canvas.test/conversations")
+        self.assertFalse(conversations[2]["unread"])
+        conversation_request = next(
+            params for path, params in zip(client.requested_paths, client.requested_params)
+            if path == "api/v1/conversations"
+        )
+        self.assertEqual(conversation_request["filter"], "course_7")
+
+    def test_conversation_permission_failure_yields_empty_list(self):
+        client = AnnouncementClient(
+            conversation_error=module.CanvasPermissionError("denied"),
+        )
+        data = module.collect(client, 14, datetime(2026, 8, 27, tzinfo=timezone.utc))
+        course = data["roles"]["student"]["courses"][0]
+        self.assertEqual(course["conversations"], [])
+        self.assertEqual(data["roles"]["student"]["error"], "")
+
+    def test_hidden_course_skips_conversation_request(self):
+        client = AnnouncementClient(conversations=[
+            {"id": 12, "subject": "New question", "workflow_state": "unread",
+             "last_message": "Hi", "last_message_at": "2026-08-25T10:00:00Z",
+             "message_count": 1, "starred": False,
+             "participants": [], "context_name": "Biology"},
+        ])
+        data = module.collect(
+            client, 14, datetime(2026, 8, 27, tzinfo=timezone.utc),
+            hidden_course_ids={"7"},
+        )
+        self.assertEqual(data["roles"]["student"]["courses"], [])
+        self.assertNotIn("api/v1/conversations", client.requested_paths)
 
 
 if __name__ == "__main__":
