@@ -9,6 +9,7 @@ import os
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -692,6 +693,10 @@ def _stop_browser(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
 
 
+def _cancel_browser_login(_signum: int, _frame: Any) -> None:
+    raise RuntimeError("Canvas browser login was cancelled")
+
+
 def browser_login(
     base_url: str,
     requested_browser: str = "",
@@ -706,6 +711,7 @@ def browser_login(
         profile = Path(directory)
         os.chmod(profile, 0o700)
         process, connection = _start_browser(executable, profile, instance_url)
+        previous_sigterm = signal.signal(signal.SIGTERM, _cancel_browser_login)
         try:
             last_validations: dict[str, tuple[str, float]] = {}
             with connection:
@@ -754,6 +760,7 @@ def browser_login(
                     time.sleep(0.5)
             raise RuntimeError("Canvas browser login timed out")
         finally:
+            signal.signal(signal.SIGTERM, previous_sigterm)
             connection.close()
             _stop_browser(process)
 

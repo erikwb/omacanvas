@@ -528,6 +528,84 @@ class CanvasTests(unittest.TestCase):
         ):
             client.get_all("api/v1/courses")
 
+    def test_browser_login_cancel_handler_reports_cancellation(self):
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            module._cancel_browser_login(module.signal.SIGTERM, None)
+
+    def test_browser_login_restores_sigterm_handler_on_failure(self):
+        before = module.signal.getsignal(module.signal.SIGTERM)
+        with patch.object(
+            module, "_start_browser", side_effect=RuntimeError("no browser"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no browser"):
+                module.browser_login("https://canvas.example.edu")
+        self.assertEqual(module.signal.getsignal(module.signal.SIGTERM), before)
+
+    def test_browser_login_cancel_stops_browser_and_cleans_up(self):
+        import os as os_module
+        import threading as threading_module
+
+        class FakeProcess:
+            def __init__(self):
+                self.terminated = False
+                self.killed = False
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                self.killed = True
+
+            def wait(self, timeout=None):
+                return 0
+
+        class FakeConnection:
+            def __init__(self):
+                self.closed = False
+
+            def command(self, method, params=None, session_id=None):
+                if method == "Target.getTargets":
+                    return {"targetInfos": [{
+                        "type": "page", "targetId": "target-1",
+                        "url": "https://canvas.example.edu/login",
+                    }]}
+                if method == "Target.attachToTarget":
+                    return {"sessionId": "session-1"}
+                return {"cookies": []}
+
+            def close(self):
+                self.closed = True
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        process = FakeProcess()
+        connection = FakeConnection()
+        before = module.signal.getsignal(module.signal.SIGTERM)
+        timer = threading_module.Timer(
+            0.2, os_module.kill, args=(os_module.getpid(), module.signal.SIGTERM),
+        )
+        with patch.object(
+            module, "_start_browser", return_value=(process, connection),
+        ), patch.object(
+            module, "_browser_session_is_authenticated", return_value=False,
+        ):
+            timer.start()
+            try:
+                with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                    module.browser_login("https://canvas.example.edu")
+            finally:
+                timer.cancel()
+        self.assertTrue(process.terminated)
+        self.assertTrue(connection.closed)
+        self.assertEqual(module.signal.getsignal(module.signal.SIGTERM), before)
+
     def test_collects_only_assignments_in_window(self):
         data = module.collect(FakeClient(), 14, datetime(2026, 8, 27, tzinfo=timezone.utc))
         student = data["roles"]["student"]
