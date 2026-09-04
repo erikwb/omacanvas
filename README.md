@@ -159,6 +159,9 @@ to switch back to the token.
 - Press `S` or `T` to select Student or Teaching while the panel is focused.
 - Press Left/Right to change views and Up/Down to scroll.
 - Press `R` or Enter to refresh, and Escape to close the panel.
+- Press `L` or select **Sign in with Canvas** when it appears to sign in
+  from the panel instead of the terminal; signing in opens a browser window
+  and continues automatically once login completes.
 
 The widget refreshes every six hours by default and shows assignments due in
 the next 14 days.
@@ -344,10 +347,11 @@ Review third-party plugin source before installation.
 
 - **“Set your Canvas URL”** — configure `baseUrl` with the `omarchy bar set`
   command above.
-- **“No Canvas credential is saved”** — run `login` or `set-token` with the
+- **“No Canvas credential is saved”** — select **Sign in with Canvas** in the
+  panel, or run `login` or `set-token` with the
   exact same base URL configured for the widget.
 - **Canvas rejected the browser session** — Canvas expired or revoked the web
-  session; run `login` again.
+  session; sign in again from the panel or run `login` again.
 - **The browser closes before login completes** — rerun `login`, optionally
   with `--browser /path/to/chromium`, and keep the isolated window open through
   the Canvas dashboard redirect.

@@ -40,6 +40,8 @@ Panel {
   property string errorText: ""
   property string visibilityError: ""
   property bool loading: false
+  property bool loggingIn: false
+  property bool authError: false
   property bool refreshAfterStatus: false
   property var pendingVisibilityCourse: null
   property bool pendingHiddenState: false
@@ -236,7 +238,25 @@ Panel {
     }
     loading = true
     errorText = ""
+    authError = false
     statusProc.running = true
+  }
+
+  function startLogin() {
+    if (loginProc.running || loggingIn) return
+    if (baseUrl === "") {
+      errorText = configurationMessage
+      return
+    }
+    loggingIn = true
+    errorText = ""
+    authError = false
+    loginProc.running = true
+  }
+
+  function cancelLogin() {
+    if (loginProc.running) loginProc.running = false
+    loggingIn = false
   }
 
   function grade(course) {
@@ -426,6 +446,7 @@ Panel {
         var message = String(statusError.text || "").trim()
         root.errorText = message !== "" ? message.replace(/^omacanvas:\s*/, "")
                                             : "Canvas could not be refreshed."
+        root.authError = /credential|log ?in|session|api token|canvas_api_key|rejected|expired/i.test(message)
         return
       }
       try {
@@ -436,6 +457,7 @@ Panel {
         root.ensureSelectedRole()
         root.ensureSelectedCourse()
         root.errorText = ""
+        root.authError = false
       } catch (error) {
         root.errorText = "Canvas returned data the bar could not read."
       }
@@ -461,6 +483,28 @@ Panel {
         else root.refreshNow()
       }
       root.pendingVisibilityCourse = null
+    }
+  }
+
+  Process {
+    id: loginProc
+    command: [root.helperPath, "login"]
+    environment: ({ "CANVAS_BASE_URL": root.baseUrl })
+    stderr: StdioCollector { id: loginErrorOutput; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.loggingIn = false
+      if (exitCode !== 0) {
+        var message = String(loginErrorOutput.text || "").trim()
+        if (/cancel/i.test(message)) return
+        root.errorText = message !== "" ? message.replace(/^omacanvas:\s*/, "")
+                                        : "Canvas sign-in did not complete."
+        root.authError = true
+        return
+      }
+      root.errorText = ""
+      root.authError = false
+      if (!statusProc.running) root.refreshNow()
+      else root.refreshAfterStatus = true
     }
   }
 
@@ -538,6 +582,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (text === "r" || text === "R") root.refreshNow()
+        else if (text === "l" || text === "L") root.startLogin()
         else if (text === "s" || text === "S") root.selectRole("student")
         else if (text === "t" || text === "T") root.selectRole("teacher")
         else if (text === "1") root.selectPane(0)
@@ -682,6 +727,41 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             wrapMode: Text.WordWrap
+          }
+
+          Button {
+            visible: root.authError && root.errorText !== "" && !root.loggingIn
+            width: parent.width
+            text: "Sign in with Canvas"
+            iconText: "\uf090"
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.body
+            onClicked: root.startLogin()
+          }
+
+          Text {
+            visible: root.loggingIn
+            width: parent.width
+            text: "A browser window has been opened for Canvas sign-in. "
+              + "Complete the login there; this will continue automatically."
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            wrapMode: Text.WordWrap
+          }
+
+          Button {
+            visible: root.loggingIn
+            width: parent.width
+            text: "Cancel sign-in"
+            bordered: false
+            leftAlign: true
+            foreground: root.dim
+            fontFamily: root.fontFamily
+            fontSize: Style.font.caption
+            onClicked: root.cancelLogin()
           }
 
           Text {
@@ -1446,7 +1526,7 @@ Panel {
 
           Text {
             width: parent.width
-            text: "Right-click or press R to refresh · ←/→ changes views"
+            text: "Right-click or press R to refresh · L to sign in · ←/→ changes views"
               + (root.showRoleSwitch ? " · S/T changes role" : "")
             color: root.dim
             font.family: root.fontFamily
